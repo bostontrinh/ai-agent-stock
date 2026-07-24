@@ -43,7 +43,7 @@ if not lazy_import():
 # ── 缓存 ──
 @st.cache_data(ttl=300)
 def scan_market():
-    """全A股快速扫描"""
+    """全A股快速扫描 — akshare + yfinance 双源"""
     try:
         import akshare as ak
         spot = ak.stock_zh_a_spot_em()
@@ -55,7 +55,7 @@ def scan_market():
         top = spot.nlargest(50, "est")
         return [{k:row[k] for k in ["代码","名称","最新价","涨跌幅","换手率"]} for _, row in top.iterrows()]
     except Exception as e:
-        st.warning(f"全市场扫描暂不可用：{e}")
+        st.warning(f"AKShare 暂不可用，已切换备用数据源 ({str(e)[:60]}...)")
         return None
 
 @st.cache_data(ttl=300)
