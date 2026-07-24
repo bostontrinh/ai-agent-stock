@@ -1,807 +1,268 @@
-from daily_report import save_daily_report
+#!/usr/bin/env python
+"""
+AI 股票分析系统 v2 — 全A股扫描 + 个股深度分析 + 持仓监控
+部署：streamlit run app.py
+"""
+
+import json, os, sys, time
+from datetime import datetime, timedelta
+
+import pandas as pd
+import numpy as np
 import streamlit as st
 import plotly.graph_objects as go
+import plotly.express as px
 
-from analyze_stock import analyze_stock
-from history import save_history, load_history
-from scanner import scan_market
+# ── 项目模块 ──────────────────────────────
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+from market import get_history
+from indicator import calculate_indicators
+from score_engine import calculate_score
+from capital import calculate_capital_score
+from risk_control import calc_stop_loss, calc_volatility, calc_risk_score, calc_max_drawdown
+from stock_pool import STOCK_POOL
 
+st.set_page_config(page_title="AI股票分析系统", page_icon="📈", layout="wide")
 
-st.set_page_config(
-    page_title="AI股票分析系统",
-    page_icon="📈",
-    layout="wide"
-)
-
-
-st.title("📈 AI 股票分析系统")
-
-
-code = st.text_input(
-    "股票代码",
-    value="300750"
-)
-
-
-
-# =====================
-# 单股票分析
-# =====================
-
-
-if st.button(
-    "开始分析",
-    key="analysis_button"
-):
-
-
-    with st.spinner(
-        "AI正在分析，请稍候..."
-    ):
-
-
-        result = analyze_stock(
-            stock_code=code
+# ── 缓存装饰器 ──────────────────────────
+@st.cache_data(ttl=600)
+def scan_full_market():
+    """全A股扫描（缓存10分钟）"""
+    try:
+        import akshare as ak
+        spot = ak.stock_zh_a_spot_em()
+        # 过滤
+        spot = spot[(spot["最新价"] > 2) & (~spot["名称"].str.contains("ST|退市", na=False))].copy()
+        # 快速预估评分
+        spot["涨跌幅"] = spot["涨跌幅"].fillna(0)
+        spot["换手率"] = spot["换手率"].fillna(0)
+        spot["成交量"] = spot["成交量"].fillna(0).astype(float)
+        spot["est"] = (
+            spot["涨跌幅"].clip(-5, 10) * 0.3
+            + spot["换手率"] / spot["换手率"].max() * 0.3
+            + np.log1p(spot["成交量"]) / np.log1p(spot["成交量"].max()) * 0.4
         )
-
-
-    save_history(
-        code,
-        result
-    )
-
-
-    st.success(
-        "分析完成！"
-    )
-
-
-    df = result["data"]
-
-    latest = df.iloc[-1]
-
-
-
-    # 股票概览
-
-    st.header(
-        "📌 股票概览"
-    )
-
-
-    c1,c2,c3,c4,c5 = st.columns(5)
-
-
-    with c1:
-
-        st.metric(
-            "最新价格",
-            f"{latest['Close']:.2f}"
-        )
-
-
-    with c2:
-
-        st.metric(
-            "涨跌幅",
-            f"{latest['CHANGE_PCT']:.2f}%"
-        )
-
-
-    with c3:
-
-        st.metric(
-            "AI评分",
-            f"{result['score']}分"
-        )
-
-
-    with c4:
-
-        st.metric(
-            "建议",
-            result["signal"]
-        )
-
-
-    with c5:
-
-        st.metric(
-            "风险",
-            result["risk"]
-        )
-
-
-
-    st.divider()
-
-
-
-    # =====================
-    # K线
-    # =====================
-
-
-    st.header(
-        "📈 K线走势"
-    )
-
-
-    fig = go.Figure()
-
-
-
-    fig.add_trace(
-        go.Candlestick(
-            x=df.index,
-            open=df["Open"],
-            high=df["High"],
-            low=df["Low"],
-            close=df["Close"],
-            name="K线"
-        )
-    )
-
-
-
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["MA5"],
-            name="MA5"
-        )
-    )
-
-
-
-    fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["MA20"],
-            name="MA20"
-        )
-    )
-
-
-
-    fig.update_layout(
-        height=600,
-        xaxis_rangeslider_visible=False
-    )
-
-
-
-    st.plotly_chart(
-        fig,
-        use_container_width=True
-    )
-
-
-
-    # =====================
-    # MACD
-    # =====================
-
-
-    st.header(
-        "📉 MACD"
-    )
-
-
-    macd_fig = go.Figure()
-
-
-    macd_fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["MACD"],
-            name="DIF"
-        )
-    )
-
-
-    macd_fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["MACD_SIGNAL"],
-            name="DEA"
-        )
-    )
-
-
-    macd_fig.add_trace(
-        go.Bar(
-            x=df.index,
-            y=df["MACD_HIST"],
-            name="柱"
-        )
-    )
-
-
-    st.plotly_chart(
-        macd_fig,
-        use_container_width=True
-    )
-        # =====================
-    # RSI
-    # =====================
-
-
-    st.header(
-        "📈 RSI"
-    )
-
-
-    rsi_fig = go.Figure()
-
-
-    rsi_fig.add_trace(
-        go.Scatter(
-            x=df.index,
-            y=df["RSI"],
-            name="RSI"
-        )
-    )
-
-
-    rsi_fig.add_hline(
-        y=70,
-        line_dash="dash"
-    )
-
-
-    rsi_fig.add_hline(
-        y=30,
-        line_dash="dash"
-    )
-
-
-    rsi_fig.update_layout(
-        height=350
-    )
-
-
-    st.plotly_chart(
-        rsi_fig,
-        use_container_width=True
-    )
-
-
-
-    # =====================
-    # AI综合决策
-    # =====================
-
-
-    st.divider()
-
-
-    st.header(
-        "🤖 AI综合决策"
-    )
-
-
-    trend = (
-        "多头 ✅"
-        if latest["MA5"] > latest["MA20"]
-        else
-        "空头 ⚠️"
-    )
-
-
-    macd_state = (
-        "金叉 ✅"
-        if latest["MACD"] > latest["MACD_SIGNAL"]
-        else
-        "死叉 ⚠️"
-    )
-
-
-    if latest["RSI"] > 70:
-
-        rsi_state = "超买 ⚠️"
-
-    elif latest["RSI"] < 30:
-
-        rsi_state = "超卖 ⚠️"
-
-    else:
-
-        rsi_state = "正常 ✅"
-
-
-
-    a,b,c,d = st.columns(4)
-
-
-
-    with a:
-
-        st.metric(
-            "趋势",
-            trend
-        )
-
-
-    with b:
-
-        st.metric(
-            "MACD",
-            macd_state
-        )
-
-
-    with c:
-
-        st.metric(
-            "RSI",
-            rsi_state
-        )
-
-
-    with d:
-
-        st.metric(
-            "AI评分",
-            result["score"]
-        )
-
-
-
-    if (
-        result["score"] >= 70
-        and latest["MA5"] > latest["MA20"]
-        and latest["MACD"] > latest["MACD_SIGNAL"]
-    ):
-
-        st.success(
-            "🟢 多头信号"
-        )
-
-    elif result["score"] <= 40:
-
-        st.error(
-            "🔴 风险较高"
-        )
-
-    else:
-
-        st.warning(
-            "🟡 观望信号"
-        )
-
-
-
-    # =====================
-    # 交易建议
-    # =====================
-
-
-    st.divider()
-
-
-    st.header(
-        "💰 交易建议"
-    )
-
-
-    st.write(
-        f"支撑位：{result['support']}"
-    )
-
-
-    st.write(
-        f"压力位：{result['resistance']}"
-    )
-
-
-    st.write(
-        f"买入区：{result['buy_zone']}"
-    )
-
-
-    st.write(
-        f"止损位：{result['stop_loss']}"
-    )
-
-
-    st.write(
-        f"止盈位：{result['take_profit']}"
-    )
-
-
-
-    # =====================
-    # 风控中心（新增）
-    # =====================
-
-
-    st.divider()
-
-
-    st.header(
-        "🛡️ 风控中心"
-    )
-
-
-    with st.expander(
-        "📊 止损/止盈策略",
-        expanded=True
-    ):
-
-
-        from risk_control import (
-            calc_stop_loss,
-            calc_take_profit,
-            calc_risk_score,
-            calc_volatility,
-            generate_warning,
-        )
-        from position_sizing import (
-            fixed_pct_sizing,
-            kelly_criterion,
-        )
-
-
-        entry = st.number_input(
-            "你的买入价",
-            value=float(latest["Close"]),
-            step=0.01,
-            format="%.2f",
-            key="entry_price"
-        )
-
-
-        current = float(latest["Close"])
-        loss_pct = (current - entry) / entry * 100
-
-
-        st.metric(
-            "当前盈亏",
-            f"{loss_pct:+.2f}%",
-            delta=None
-        )
-
-
-        # 止损策略
-        c1, c2 = st.columns(2)
-
-
-        with c1:
-
-
-            st.subheader("🔴 止损建议")
-
-            stops = [
-                calc_stop_loss(entry, "hard"),
-                calc_stop_loss(entry, "atr", df),
-                calc_stop_loss(entry, "support", df),
-                calc_stop_loss(entry, "ma", df),
-            ]
-
-
-            for s in stops:
-                st.write(
-                    f"**{s['method']}**: {s['price']}元 ({s['pct']:+.2f}%)"
-                )
-
-
-        with c2:
-
-
-            st.subheader("🟢 止盈建议")
-
-            takes = calc_take_profit(entry, "risk_reward", abs(loss_pct) if loss_pct < 0 else 8)
-
-
-            for t in takes:
-                st.write(
-                    f"**{t['method']}**: {t['price']}元 (+{t['pct']:.1f}%)"
-                )
-
-
-    with st.expander(
-        "📏 仓位管理"
-    ):
-
-
-        capital = st.number_input(
-            "总资金（元）",
-            value=100000,
-            step=10000,
-            format="%d",
-            key="total_capital"
-        )
-
-
-        sizing = fixed_pct_sizing(capital)
-
-
-        st.info(
-            f"建议买入 **{sizing['position_size']:.0f}元** "
-            f"（占 {sizing['position_pct']:.1f}%）"
-        )
-
-
-        st.write(
-            f"单笔最大亏损：{sizing['max_loss']:.0f}元 "
-            f"（{sizing['max_loss_pct']:.1f}%）"
-        )
-
-
-        # 组合建议
-        st.subheader("组合配置建议")
-
-        from position_sizing import calculate_max_positions
-
-        max_pos = calculate_max_positions(capital, 0.08)
-        st.write(max_pos["suggestion"])
-
-        from portfolio_manager import portfolio_position_sizing
-
-        positions = portfolio_position_sizing(capital)
-        for p in positions:
-            st.write(f"  #{p['stock_no']}: {p['amount']:.0f}元 ({p['pct']:.1f}%)")
-
-
-    with st.expander(
-        "⚠️ 风险评分"
-    ):
-
-
+        top = spot.nlargest(30, "est")
+        return top[["代码","名称","最新价","涨跌幅","换手率","成交量"]].to_dict("records")
+    except:
+        return []
+
+@st.cache_data(ttl=600)
+def full_analysis(code):
+    """个股完整分析（缓存10分钟）"""
+    try:
+        df = get_history(code)
+        df = calculate_indicators(df)
+        score = calculate_score(df)
+        cap = calculate_capital_score(df)
         risk = calc_risk_score(df)
         vol = calc_volatility(df)
-        warnings = generate_warning(entry, current, df)
-
-
-        c1, c2, c3 = st.columns(3)
-
-
-        with c1:
-            st.metric("风险等级", risk["level"])
-
-        with c2:
-            st.metric("年化波动", f"{vol['annual_vol']}%")
-
-        with c3:
-            st.metric("日均波幅", vol["avg_daily_range"])
-
-
-        if warnings:
-            st.subheader("预警列表")
-            for w in warnings:
-                emoji = {"注意": "⚡", "警告": "⚠️", "严重": "⛔"}.get(
-                    w["level"], "📌"
-                )
-                st.write(f"{emoji} **[{w['level']}]** {w['msg']}")
-                st.write(f"  建议操作：{w['action']}")
-
-
-    # =====================
-    # AI报告
-    # =====================
-
-
-    st.divider()
-
-
-    st.header(
-        "🤖 AI分析报告"
-    )
-
-
-    st.info(
-        result["reason"]
-    )
-
-
-    st.write(
-        result["analysis"]
-    )
-
-
-
-# =====================
-# 历史分析记录
-# =====================
-
-
-st.divider()
-
-
-st.header(
-    "📁 历史分析记录"
-)
-
-
-history = load_history()
-
-
-
-if history:
-
-
-    for item in history[:10]:
-
-
-        with st.expander(
-            f"{item['stock_code']}  {item['time']}"
-        ):
-
-
-            st.write(
-                f"评分：{item['score']}分"
-            )
-
-
-            st.write(
-                f"趋势：{item['trend']}"
-            )
-
-
-            st.write(
-                f"建议：{item['signal']}"
-            )
-
-
-else:
-
-
-    st.write(
-        "暂无历史记录"
-    )
-
-
-
-# =====================
-# AI市场扫描
-# =====================
-
-
-st.divider()
-
-
-st.header(
-    "🔍 AI市场扫描"
-)
-
-
-st.write(
-    "扫描股票池，自动生成AI选股排行榜"
-)
-
-
-
-if st.button(
-    "🚀 开始扫描股票池",
-    key="market_scan"
-):
-
-
-    try:
-
-
-        with st.spinner(
-            "正在扫描市场..."
-        ):
-
-
-            ranking = scan_market()
-
-
-            report_file = save_daily_report(
-                ranking
-            )
-
-
-        st.success(
-            "扫描完成！"
-        )
-
-
-
-        if len(ranking) == 0:
-
-
-            st.warning(
-                "没有扫描结果"
-            )
-
-
+        dd = calc_max_drawdown(df["Close"])
+        latest = df.iloc[-1]
+        l2 = df.iloc[-2]
+        price = float(latest["Close"])
+        stop = calc_stop_loss(price, "atr", df)
+
+        # 信号
+        trend = "多头" if float(latest["MA5"]) > float(latest["MA20"]) else "空头"
+        macd_t = "金叉" if float(latest["MACD"]) > float(latest["MACD_SIGNAL"]) else "死叉"
+        total = score["score"] * 0.7 + cap * 0.3
+
+        if risk["score"] >= 50 or trend == "空头":
+            signal = "🔴 卖出"
+        elif total >= 65 and risk["score"] < 40:
+            signal = "🟢 买入"
+        elif total >= 55:
+            signal = "🟡 持有"
         else:
+            signal = "⚪ 观望"
 
-
-            st.subheader(
-                "🏆 AI选股排行榜"
-            )
-
-
-
-            for i,item in enumerate(
-                ranking,
-                start=1
-            ):
-
-
-                if i == 1:
-
-                    icon="🥇"
-
-                elif i == 2:
-
-                    icon="🥈"
-
-                elif i == 3:
-
-                    icon="🥉"
-
-                else:
-
-                    icon="⭐"
-
-
-
-                with st.expander(
-                    f"{icon} 第{i}名 {item['股票名称']} ({item['股票代码']})"
-                ):
-
-
-                    c1,c2,c3,c4 = st.columns(4)
-
-
-                    c1.metric(
-                        "程序评分",
-                        item["程序评分"]
-                    )
-
-
-                    c2.metric(
-                        "AI评分",
-                        item["AI评分"]
-                    )
-
-
-                    c3.metric(
-                        "建议",
-                        item["建议"]
-                    )
-
-
-                    c4.metric(
-                        "风险",
-                        item["风险"]
-                    )
-
-
-                    st.write(
-                        f"""
-⭐ 星级：
-{item['星级']}
-
-成功率：
-{item['成功率']}
-
-均线：
-{item['均线']}
-
-MACD：
-{item['MACD']}
-
-RSI：
-{item['RSI']}
-
-成交量：
-{item['成交量']}
-
-突破：
-{item['突破']}
-"""
-                    )
-
-
+        return {
+            "df": df, "latest": latest, "prev": l2, "price": price,
+            "score": total, "risk": risk, "vol": vol, "dd": dd,
+            "stop": stop, "trend": trend, "macd_t": macd_t,
+            "signal": signal, "code": code, "name": STOCK_POOL.get(code, ""),
+            "ok": True, "reason": f"评分{total:.0f} 趋势{trend} {macd_t} 风险{risk['level']}",
+        }
     except Exception as e:
+        return {"ok": False, "error": str(e)[:200]}
 
 
-        st.error(
-            f"扫描失败：{e}"
-        )
+def plot_kline(df):
+    fig = go.Figure()
+    fig.add_trace(go.Candlestick(x=df.index, open=df["Open"], high=df["High"],
+                                  low=df["Low"], close=df["Close"], name="K线"))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA5"], name="MA5", line=dict(width=1)))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MA20"], name="MA20", line=dict(width=1)))
+    if "MA60" in df.columns:
+        fig.add_trace(go.Scatter(x=df.index, y=df["MA60"], name="MA60", line=dict(width=1, dash="dot")))
+    fig.update_layout(height=500, xaxis_rangeslider_visible=False, margin=dict(l=0, r=0, t=0, b=0))
+    return fig
+
+
+def plot_macd(df):
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD"], name="DIF"))
+    fig.add_trace(go.Scatter(x=df.index, y=df["MACD_SIGNAL"], name="DEA"))
+    fig.add_trace(go.Bar(x=df.index, y=df["MACD_HIST"], name="柱", marker_color=np.where(df["MACD_HIST"]>=0, "red", "green")))
+    fig.update_layout(height=250, margin=dict(l=0, r=0, t=0, b=0))
+    return fig
+
+
+# ══════════════════════════════════════════
+# UI
+# ══════════════════════════════════════════
+
+st.title("📈 AI 股票分析系统")
+st.markdown("全A股扫描 · 技术面分析 · AI 评分 · 风控建议")
+
+tab1, tab2, tab3 = st.tabs(["🔍 全市场扫描", "📊 个股深度分析", "📋 我的持仓"])
+
+# ──────────── TAB 1: 全市场扫描 ────────────
+with tab1:
+    st.header("全A股扫描（TOP 30）")
+    st.caption("基于实时行情数据 + 技术面预评分，每10分钟自动刷新")
+
+    if st.button("🔄 立即扫描全市场", use_container_width=True):
+        with st.spinner("正在扫描5000+只A股，请稍候..."):
+            data = scan_full_market()
+            if data:
+                st.success(f"✅ 扫描完成，共处理 {len(data)} 只候选股票")
+                # 批量做精评（只做前15只，避免太慢）
+                results = []
+                progress = st.progress(0)
+                for i, item in enumerate(data[:15]):
+                    result = full_analysis(item["代码"])
+                    progress.progress((i + 1) / 15)
+                    if result["ok"]:
+                        results.append({
+                            "代码": result["code"], "名称": result["name"],
+                            "现价": result["price"],
+                            "涨跌幅": f"{float(data[i]['涨跌幅']):+.2f}%",
+                            "评分": f"{result['score']:.0f}",
+                            "趋势": result["trend"],
+                            "信号": result["signal"],
+                            "风险": result["risk"]["level"],
+                            "理由": result["reason"],
+                        })
+                progress.empty()
+
+                if results:
+                    df_show = pd.DataFrame(results)
+                    st.dataframe(df_show, use_container_width=True, hide_index=True,
+                                 column_config={
+                                     "信号": st.column_config.TextColumn("信号", width="small"),
+                                     "评分": st.column_config.TextColumn("评分", width="small"),
+                                     "现价": st.column_config.NumberColumn("现价", format="%.2f"),
+                                 })
+                    st.markdown("**🟢 买入信号** 的股票可重点关注")
+            else:
+                st.error("扫描失败，请稍后重试")
+
+    # 显示缓存数据
+    cached = scan_full_market()
+    if cached:
+        st.info(f"📌 上次扫描时间：{datetime.now().strftime('%H:%M')}，共 {len(cached)} 只候选股，点击上方按钮刷新")
+
+# ──────────── TAB 2: 个股深度分析 ────────────
+with tab2:
+    col1, col2 = st.columns([3, 1])
+    with col1:
+        code = st.text_input("输入股票代码", value="000001", max_chars=6).strip()
+    with col2:
+        name_hint = STOCK_POOL.get(code, "")
+        if name_hint:
+            st.markdown(f"**{name_hint}**")
+        else:
+            st.markdown("&nbsp;")
+
+    if st.button("🔍 深度分析", type="primary", use_container_width=True):
+        with st.spinner(f"正在分析 {code} ..."):
+            result = full_analysis(code)
+
+        if not result["ok"]:
+            st.error(f"分析失败：{result.get('error', '未知错误')}")
+        else:
+            r = result
+            # 指标卡片
+            c1, c2, c3, c4, c5 = st.columns(5)
+            c1.metric("现价", f"{r['price']:.2f}", f"{float(r['latest']['CHANGE_PCT']):+.2f}%")
+            c2.metric("评分", f"{r['score']:.0f}/100")
+            c3.metric("信号", r["signal"])
+            c4.metric("趋势", r["trend"])
+            c5.metric("风险", r["risk"]["level"])
+
+            # 止损止盈
+            cc1, cc2, cc3 = st.columns(3)
+            cc1.metric("止损价", f"{r['stop']['price']:.2f} ({r['stop']['pct']:.1f}%)")
+            cc2.metric("最大回撤", f"{r['dd']['max_drawdown']:.1f}%")
+            cc3.metric("年化波动", f"{r['vol']['annual_vol']:.1f}%")
+
+            # 技术面详情
+            l = r["latest"]
+            st.markdown(f"""
+**均线**: MA5={l['MA5']:.2f} MA10={l['MA10']:.2f} MA20={l['MA20']:.2f}  
+**MACD**: {r['macd_t']}  DIF={l['MACD']:.4f}  DEA={l['MACD_SIGNAL']:.4f}  
+**RSI**: {l['RSI']:.1f}  （超买>70 超卖<30）  
+**布林带**: 上轨={l['BB_HIGH']:.2f} 下轨={l['BB_LOW']:.2f}  
+**区间**: 20日高={l['HIGH20']:.2f} 20日低={l['LOW20']:.2f}
+""")
+
+            # K线
+            st.subheader("📈 K线走势")
+            st.plotly_chart(plot_kline(r["df"]), use_container_width=True)
+
+            # MACD + RSI 双栏
+            mc1, mc2 = st.columns(2)
+            with mc1:
+                st.subheader("📉 MACD")
+                st.plotly_chart(plot_macd(r["df"]), use_container_width=True)
+            with mc2:
+                st.subheader("📊 RSI (14)")
+                rsi_fig = go.Figure()
+                rsi_fig.add_trace(go.Scatter(x=r["df"].index, y=r["df"]["RSI"], name="RSI"))
+                rsi_fig.add_hline(y=70, line_dash="dash", line_color="red")
+                rsi_fig.add_hline(y=30, line_dash="dash", line_color="green")
+                rsi_fig.update_layout(height=250, margin=dict(l=0, r=0, t=0, b=0))
+                st.plotly_chart(rsi_fig, use_container_width=True)
+
+            # 操作建议
+            st.divider()
+            st.subheader("💡 操作建议")
+            if "买入" in r["signal"]:
+                st.success(f"**🟢 买入信号**\n\n{r['reason']}")
+            elif "卖出" in r["signal"]:
+                st.error(f"**🔴 卖出信号**\n\n建议止损，跌破 {r['stop']['price']:.2f} 必须走")
+            elif "持有" in r["signal"]:
+                st.warning(f"**🟡 持有观望**\n\n继续持有，设好止损 {r['stop']['price']:.2f}")
+            else:
+                st.info(f"**⚪ 观望**\n\n不操作不补仓")
+
+# ──────────── TAB 3: 我的持仓 ────────────
+with tab3:
+    st.header("我的持仓监控")
+    PORTFOLIO = {"600176": "中国巨石", "000021": "深科技", "002185": "华天科技", "516650": "有色金属ETF"}
+
+    if st.button("🔄 刷新持仓状态", use_container_width=True):
+        with st.spinner("正在分析持仓..."):
+            for code, name in PORTFOLIO.items():
+                is_etf = code.startswith(("51", "16"))
+                result = full_analysis(code)
+                if result["ok"]:
+                    r = result
+                    bg = "#1a3a1a" if "买入" in r["signal"] else "#3a1a1a" if "卖出" in r["signal"] else "#1a1a3a"
+                    st.markdown(f"""
+<div style="background:{bg}; padding:16px; border-radius:12px; margin-bottom:12px">
+<h4 style="margin:0">{code} {name} <span style="float:right">{r['signal']}</span></h4>
+<p style="margin:4px 0">现价 <b>{r['price']:.2f}</b> &nbsp;|&nbsp; 评分 <b>{r['score']:.0f}</b> &nbsp;|&nbsp; 趋势 {r['trend']} &nbsp;|&nbsp; 风险 {r['risk']['level']}</p>
+<p style="margin:4px 0">止损 <b style="color:#ff6b6b">{r['stop']['price']:.2f}</b> &nbsp;|&nbsp; MA5={r['latest']['MA5']:.2f} MA20={r['latest']['MA20']:.2f}</p>
+</div>
+""", unsafe_allow_html=True)
+                else:
+                    st.error(f"{code} {name}：数据获取失败")
+
+    st.caption("数据每10分钟自动刷新，点击上方按钮手动刷新")
+
+# ── 页脚 ──
+st.divider()
+st.caption("⚠️ 本系统仅供研究参考，不构成投资建议 | AI分析基于技术指标，请结合实际情况决策")
