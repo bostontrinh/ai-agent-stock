@@ -265,10 +265,11 @@ with tabs[2]:
             r = tech_analysis(code)
             if not r["ok"]: continue
             sig = r["signal"]
+            sig_key = sig[:2].strip() if sig else "⚪"
             bg = {"🟢":"#162312", "🟡":"#1a1a12", "🔴":"#2a1212", "⚪":"#1a1a2e"}
-            border = {"🟢":"#49aa19", "🟡":"#d4b106", "🔴":"#d32029", "⚪":"#555"}[sig[:2]]
+            border = {"🟢":"#49aa19", "🟡":"#d4b106", "🔴":"#d32029", "⚪":"#555"}.get(sig_key, "#555")
             st.markdown(f"""
-<div style="background:{bg.get(sig[:2],'#1a1a2e')};border-left:4px solid {border};padding:16px;border-radius:8px;margin-bottom:8px">
+<div style="background:{bg.get(sig_key, '#1a1a2e')};border-left:4px solid {border};padding:16px;border-radius:8px;margin-bottom:8px">
 <div style="display:flex;justify-content:space-between"><strong>{code} {name}</strong><span>{sig}</span></div>
 <div style="display:flex;gap:24px;margin-top:8px;font-size:14px;color:#ccc">
 <span>💰 {r['price']:.2f}</span><span>📊 {r['score']:.0f}分</span>
