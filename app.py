@@ -43,7 +43,8 @@ if not lazy_import():
 # ── 缓存 ──
 @st.cache_data(ttl=300)
 def scan_market():
-    """全A股快速扫描 — akshare + yfinance 双源"""
+    """全A股快速扫描 — akshare优先，yfinance备用"""
+    # 先试 akshare
     try:
         import akshare as ak
         spot = ak.stock_zh_a_spot_em()
@@ -54,9 +55,41 @@ def scan_market():
         spot["est"] = (spot["涨跌幅"].clip(-5,10)*0.3 + spot["换手率"]/spot["换手率"].max()*0.3 + np.log1p(spot["成交量"]/spot["成交量"].max())*0.4)
         top = spot.nlargest(50, "est")
         return [{k:row[k] for k in ["代码","名称","最新价","涨跌幅","换手率"]} for _, row in top.iterrows()]
-    except Exception as e:
-        st.warning(f"AKShare 暂不可用，已切换备用数据源 ({str(e)[:60]}...)")
-        return None
+    except:
+        pass
+    # yfinance 备用: 取沪深300核心成分股
+    st.info("使用 yfinance 备用源扫描...")
+    import yfinance as yf
+    codes = _top300_codes()
+    results = []
+    for i, (code, name) in enumerate(codes):
+        try:
+            sym = f"{code}.{'SZ' if code.startswith(('0','3')) else 'SS'}"
+            t = yf.Ticker(sym)
+            info = t.fast_info if hasattr(t, 'fast_info') else t.info
+            price = info.get('lastPrice') or info.get('regularMarketPrice') or info.get('previousClose') or 0
+            chg = info.get('regularMarketChangePercent') or 0
+            if price > 0:
+                results.append({"代码": code, "名称": name, "最新价": price, "涨跌幅": chg, "换手率": 0})
+        except:
+            pass
+    results.sort(key=lambda x: x["涨跌幅"], reverse=True)
+    st.success(f"yfinance 扫描完成，{len(results)} 只股票")
+    return results[:50] if results else None
+
+# 沪深300核心成分股（yfinance 备用）
+def _top300_codes():
+    return [
+        ("600519","贵州茅台"),("300750","宁德时代"),("000858","五粮液"),("600036","招商银行"),
+        ("601318","中国平安"),("000333","美的集团"),("002594","比亚迪"),("600900","长江电力"),
+        ("000001","平安银行"),("601166","兴业银行"),("600030","中信证券"),("600276","恒瑞医药"),
+        ("601398","工商银行"),("601328","交通银行"),("601288","农业银行"),("600887","伊利股份"),
+        ("002475","立讯精密"),("600809","山西汾酒"),("603259","药明康德"),("600031","三一重工"),
+        ("300059","东方财富"),("002415","海康威视"),("000568","泸州老窖"),("688981","中芯国际"),
+        ("601899","紫金矿业"),("600309","万华化学"),("000002","万科A"),("600585","海螺水泥"),
+        ("002142","宁波银行"),("002352","顺丰控股"),("300760","迈瑞医疗"),("601888","中国中免"),
+        ("600585","海螺水泥"),("002714","牧原股份"),("000725","京东方A"),("601688","华泰证券"),
+    ]
 
 @st.cache_data(ttl=300)
 def tech_analysis(code):
@@ -258,12 +291,34 @@ with tabs[1]:
 
 # ═══ TAB 3: 持仓 ═══
 with tabs[2]:
-    PORTFOLIO = {"600176":"中国巨石", "000021":"深科技", "002185":"华天科技", "516650":"有色金属ETF"}
     st.header("我的持仓")
+
+    # 初始化持仓
+    if "portfolio" not in st.session_state:
+        st.session_state["portfolio"] = {"600176":"中国巨石", "000021":"深科技", "002185":"华天科技", "516650":"有色金属ETF"}
+
+    # 添加/删除
+    c1, c2, c3 = st.columns([3, 1, 1])
+    with c1:
+        new_code = st.text_input("添加股票代码", key="add_code", max_chars=6, placeholder="600519").strip()
+    with c2:
+        if st.button("➕ 添加", use_container_width=True) and new_code and len(new_code) == 6:
+            st.session_state["portfolio"][new_code] = STOCK_POOL.get(new_code, new_code)
+            st.rerun()
+    with c3:
+        remove_code = st.selectbox("删除", [""] + list(st.session_state["portfolio"].keys()), key="remove_code")
+        if remove_code and st.button("🗑 删除", use_container_width=True):
+            st.session_state["portfolio"].pop(remove_code, None)
+            st.rerun()
+
+    st.caption(f"当前 {len(st.session_state['portfolio'])} 只持仓")
+
     with st.spinner("更新中..."):
-        for code, name in PORTFOLIO.items():
+        for code, name in st.session_state["portfolio"].items():
             r = tech_analysis(code)
-            if not r["ok"]: continue
+            if not r["ok"]: 
+                st.warning(f"{code} {name}：数据获取失败")
+                continue
             sig = r["signal"]
             sig_key = sig[:2].strip() if sig else "⚪"
             bg = {"🟢":"#162312", "🟡":"#1a1a12", "🔴":"#2a1212", "⚪":"#1a1a2e"}
