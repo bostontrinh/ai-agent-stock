@@ -43,41 +43,34 @@ if not lazy_import():
 # ── 缓存 ──
 @st.cache_data(ttl=300)
 def scan_market():
-    """全A股快速扫描 — akshare优先，yfinance备用"""
-    # 先试 akshare
+    """全A股快速扫描"""
     try:
         import akshare as ak
-        spot = ak.stock_zh_a_spot_em()
+        spot = ak.stock_zh_a_spot()
         spot = spot[(spot["最新价"] > 2) & (~spot["名称"].str.contains("ST|退市|N", na=False))].copy()
-        spot["涨跌幅"] = spot["涨跌幅"].fillna(0).astype(float)
-        spot["换手率"] = spot["换手率"].fillna(0).astype(float)
+        spot["涨跌幅"] = spot["涨跌幅"].astype(float)
         spot["成交量"] = spot["成交量"].fillna(0).astype(float)
-        spot["est"] = (spot["涨跌幅"].clip(-5,10)*0.3 + spot["换手率"]/spot["换手率"].max()*0.3 + np.log1p(spot["成交量"]/spot["成交量"].max())*0.4)
-        top = spot.nlargest(50, "est")
-        return [{k:row[k] for k in ["代码","名称","最新价","涨跌幅","换手率"]} for _, row in top.iterrows()]
+        # 按涨跌幅排序取TOP
+        spot = spot.sort_values("涨跌幅", ascending=False)
+        top = spot.head(50)
+        return [{k:row[k] for k in ["代码","名称","最新价","涨跌幅"]} for _, row in top.iterrows()]
     except:
-        pass
-    # yfinance 备用: 取沪深300核心成分股（分批限速）
-    st.info("使用 yfinance 备用源扫描...")
-    import time as _t, yfinance as yf
-    codes = _top300_codes()
-    results = []
-    for i, (code, name) in enumerate(codes):
-        try:
-            sym = f"{code}.{'SZ' if code.startswith(('0','3')) else 'SS'}"
-            t = yf.Ticker(sym)
-            h = t.history(period="5d")
-            if not h.empty:
-                price = float(h["Close"].iloc[-1])
-                prev = float(h["Close"].iloc[-2]) if len(h) > 1 else price
-                chg = (price - prev) / prev * 100
-                results.append({"代码": code, "名称": name, "最新价": round(price,2), "涨跌幅": round(chg,2), "换手率": 0})
-            if i % 3 == 0: _t.sleep(0.3)  # 避免限速
-        except:
-            pass
-    results.sort(key=lambda x: x["涨跌幅"], reverse=True)
-    st.success(f"yfinance 扫描完成，{len(results)} 只股票")
-    return results[:50] if results else None
+        # yfinance fallback
+        st.info("使用 yfinance 备用源扫描...")
+        import time as _t, yfinance as yf
+        codes = _top300_codes()
+        results = []
+        for i, (code, name) in enumerate(codes):
+            try:
+                sym = f"{code}.{'SZ' if code.startswith(('0','3')) else 'SS'}"
+                h = yf.Ticker(sym).history(period="5d")
+                if not h.empty:
+                    p, prev = float(h["Close"].iloc[-1]), float(h["Close"].iloc[-2])
+                    results.append({"代码":code,"名称":name,"最新价":round(p,2),"涨跌幅":round((p-prev)/prev*100,2)})
+                if i%5==0: _t.sleep(0.5)
+            except: pass
+        results.sort(key=lambda x: x["涨跌幅"], reverse=True)
+        return results[:50] if results else None
 
 # 沪深300核心成分股（yfinance 备用）
 def _top300_codes():
