@@ -15,15 +15,18 @@ def _akshare_daily(symbol: str) -> pd.DataFrame:
 def _yf_daily(code: str) -> pd.DataFrame:
     """yfinance 获取（海外IP备用）"""
     import yfinance as yf
-    # A股代码映射: 000001.SZ, 600036.SS
-    suffix = ".SZ" if code.startswith(("0","3")) else ".SS"
-    ticker = yf.Ticker(code + suffix)
+    # ETF: 51xxxx -> .SS
+    if code.startswith("51"):
+        ticker = yf.Ticker(code + ".SS")
+    elif code.startswith(("0","3")):
+        ticker = yf.Ticker(code + ".SZ")
+    else:
+        ticker = yf.Ticker(code + ".SS")
     df = ticker.history(period="6mo")
     if df.empty:
         raise ValueError("no data")
     df.index = pd.to_datetime(df.index.date)
     df = df.rename(columns={"Open":"开盘","High":"最高","Low":"最低","Close":"收盘","Volume":"成交量"})
-    # 补全AKShare格式的列
     df["开盘"] = df["开盘"].astype(float); df["收盘"] = df["收盘"].astype(float)
     df["最高"] = df["最高"].astype(float); df["最低"] = df["最低"].astype(float)
     df["成交量"] = df["成交量"].astype(float)

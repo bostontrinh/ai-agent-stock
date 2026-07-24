@@ -66,11 +66,12 @@ def scan_market():
         try:
             sym = f"{code}.{'SZ' if code.startswith(('0','3')) else 'SS'}"
             t = yf.Ticker(sym)
-            info = t.fast_info if hasattr(t, 'fast_info') else t.info
-            price = info.get('lastPrice') or info.get('regularMarketPrice') or info.get('previousClose') or 0
-            chg = info.get('regularMarketChangePercent') or 0
-            if price > 0:
-                results.append({"代码": code, "名称": name, "最新价": price, "涨跌幅": chg, "换手率": 0})
+            # 直接从 history 获取最新价格（比 info 快）
+            h = t.history(period="1d")
+            if not h.empty:
+                price = float(h["Close"].iloc[-1])
+                chg = float(h["Close"].iloc[-1] - h["Open"].iloc[0]) / float(h["Open"].iloc[0]) * 100
+                results.append({"代码": code, "名称": name, "最新价": round(price,2), "涨跌幅": round(chg,2), "换手率": 0})
         except:
             pass
     results.sort(key=lambda x: x["涨跌幅"], reverse=True)
