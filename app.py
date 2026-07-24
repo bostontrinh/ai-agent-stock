@@ -57,21 +57,22 @@ def scan_market():
         return [{k:row[k] for k in ["代码","名称","最新价","涨跌幅","换手率"]} for _, row in top.iterrows()]
     except:
         pass
-    # yfinance 备用: 取沪深300核心成分股
+    # yfinance 备用: 取沪深300核心成分股（分批限速）
     st.info("使用 yfinance 备用源扫描...")
-    import yfinance as yf
+    import time as _t, yfinance as yf
     codes = _top300_codes()
     results = []
     for i, (code, name) in enumerate(codes):
         try:
             sym = f"{code}.{'SZ' if code.startswith(('0','3')) else 'SS'}"
             t = yf.Ticker(sym)
-            # 直接从 history 获取最新价格（比 info 快）
-            h = t.history(period="1d")
+            h = t.history(period="5d")
             if not h.empty:
                 price = float(h["Close"].iloc[-1])
-                chg = float(h["Close"].iloc[-1] - h["Open"].iloc[0]) / float(h["Open"].iloc[0]) * 100
+                prev = float(h["Close"].iloc[-2]) if len(h) > 1 else price
+                chg = (price - prev) / prev * 100
                 results.append({"代码": code, "名称": name, "最新价": round(price,2), "涨跌幅": round(chg,2), "换手率": 0})
+            if i % 3 == 0: _t.sleep(0.3)  # 避免限速
         except:
             pass
     results.sort(key=lambda x: x["涨跌幅"], reverse=True)
