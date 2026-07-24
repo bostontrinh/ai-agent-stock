@@ -47,16 +47,15 @@ def scan_market():
     try:
         import akshare as ak
         spot = ak.stock_zh_a_spot()
-        spot = spot[(spot["最新价"] > 2) & (~spot["名称"].str.contains("ST|退市|N", na=False))].copy()
+        spot = spot[(spot["最新价"] > 3) & (~spot["名称"].str.contains("ST|退市|N", na=False))].copy()
         spot["涨跌幅"] = spot["涨跌幅"].astype(float)
         spot["成交量"] = spot["成交量"].fillna(0).astype(float)
-        # 按涨跌幅排序取TOP
+        # 按涨跌幅排序取TOP30候选
         spot = spot.sort_values("涨跌幅", ascending=False)
-        top = spot.head(50)
+        top = spot.head(30)
         return [{k:row[k] for k in ["代码","名称","最新价","涨跌幅"]} for _, row in top.iterrows()]
     except:
         # yfinance fallback
-        st.info("使用 yfinance 备用源扫描...")
         import time as _t, yfinance as yf
         codes = _top300_codes()
         results = []
@@ -70,7 +69,7 @@ def scan_market():
                 if i%5==0: _t.sleep(0.5)
             except: pass
         results.sort(key=lambda x: x["涨跌幅"], reverse=True)
-        return results[:50] if results else None
+        return results[:30] if results else None
 
 # 沪深300核心成分股（yfinance 备用）
 def _top300_codes():
@@ -163,31 +162,29 @@ with tabs[0]:
         data = st.session_state["market_data"]
         st.info(f"📡 数据时间：{st.session_state.get('market_time','')} | 预筛 {len(data)} 只候选股，点击表格行可深度分析")
 
-        # 快速精评 TOP 20
+        # 快速精评，按评分排序（不只按涨跌幅）
         results = []
         bar = st.progress(0, text="精评中...")
         for i, item in enumerate(data[:20]):
-            r = tech_analysis(item["代码"])
-            bar.progress((i+1)/20, text=f"{item['名称']}")
-            if r["ok"]:
-                results.append({"代码": item["代码"], "名称": item["名称"],
-                    "现价": round(r["price"],2), "涨跌幅": f"{item['涨跌幅']:+.2f}%",
-                    "评分": int(r["score"]), "趋势": r["trend"], "信号": r["signal"],
-                    "风险": r["risk"]["level"].replace("⚠️","").replace("✅","").replace("⛔","").strip()})
+          r = tech_analysis(item["代码"])
+          bar.progress((i+1)/20, text=f"{item['名称']}")
+          if r["ok"]:
+              results.append({"代码": item["代码"], "名称": item["名称"],
+                  "现价": round(r["price"],2), "涨跌幅": f"{item['涨跌幅']:+.2f}%",
+                  "评分": int(r["score"]), "趋势": r["trend"], "信号": r["signal"],
+                  "风险": r["risk"]["level"].replace("⚠️","").replace("✅","").replace("⛔","").strip(),
+                  "_score": r["score"]})
         bar.empty()
 
         if results:
-            df = pd.DataFrame(results)
-            df = df.sort_values("评分", ascending=False)
-            # 颜色标记
-            def color_signal(v):
-                if "买入" in v: return "background:#1a3a1a"
-                if "卖出" in v: return "background:#3a1a1a"
-                return ""
-            st.dataframe(df, use_container_width=True, hide_index=True,
-                column_config={"信号": st.column_config.TextColumn("信号", width="small")},
-                height=min(40*len(df)+40, 600))
-            st.markdown("🟢=买入 🟡=持有 ⚪=观望 🔴=卖出  |  点击个股分析标签页输入代码查看详情")
+          results.sort(key=lambda x: x["_score"], reverse=True)
+          df = pd.DataFrame(results).drop(columns=["_score"])
+          st.dataframe(df, use_container_width=True, hide_index=True,
+              column_config={"信号": st.column_config.TextColumn("信号", width="small")},
+              height=min(40*len(df)+40, 600))
+          buy = sum(1 for r in results if "买入" in r["信号"])
+          hold = sum(1 for r in results if "持有" in r["信号"])
+          st.markdown(f"🟢买入{buy}只 🟡持有{hold}只 🔴卖出{len(results)-buy-hold}只 | 按综合评分排序，点「个股分析」查看详情")
         else:
             st.warning("精评无结果，请稍后重试")
 
